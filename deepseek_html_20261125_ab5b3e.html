@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Тайна пропавшего Нового года</title>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+<style>
+  html,body{margin:0;background:#0b1a2a;height:100%;overflow:hidden;font-family:sans-serif}
+  #rotate{display:none;position:fixed;inset:0;background:#0b1a2a;color:#fff;
+    text-align:center;padding-top:40vh;z-index:999;font-size:20px}
+  @media(orientation:portrait) and (max-width:700px){#rotate{display:block}}
+</style>
+</head>
+<body>
+<div id="rotate">📱 Поверни телефон горизонтально</div>
+<script>
+
+/* ============ 1. СОХРАНЕНИЯ ============ */
+const SaveSystem = {
+  KEY: 'ny_save_v1',
+  def() { return { level:1, toys:0, keys:0, snowflakes:[], postcards:[], achievements:[], choices:{} }; },
+  load() { try { const r = localStorage.getItem(this.KEY); return r ? {...this.def(), ...JSON.parse(r)} : this.def(); } catch { return this.def(); } },
+  save(s) { localStorage.setItem(this.KEY, JSON.stringify(s)); },
+  update(p) { const s = this.load(); Object.assign(s, p); this.save(s); return s; },
+  collect(type, id) { const s = this.load(); if (!s[type].includes(id)) s[type].push(id); this.save(s); return s[type].length; },
+  reset() { localStorage.removeItem(this.KEY); }
+};
+
+/* ============ 2. ТАЧ + КЛАВИАТУРА ============ */
+class TouchControls {
+  constructor(scene) {
+    this.scene = scene;
+    this.left = this.right = this.jump = false;
+    this.touch = scene.sys.game.device.input.touch;
+    this.cursors = scene.input.keyboard.createCursorKeys();
+    this.keys = scene.input.keyboard.addKeys('W,A,S,D,SPACE,E');
+    if (this.touch) this.build();
+  }
+  build() {
+    const s = this.scene, a = 0.35;
+    const mk = (x, y, r, color, label, flag) => {
+      const c = s.add.circle(x, y, r, color, a).setScrollFactor(0).setInteractive().setDepth(1000);
+      s.add.text(x, y, label, { fontSize: r + 'px', fill: '#fff' }).setOrigin(0.5).setDepth(1001);
+      c.on('pointerdown', () => { this[flag] = true; c.setAlpha(0.7); });
+      c.on('pointerup', () => { this[flag] = false; c.setAlpha(a); });
+      c.on('pointerout', () => { this[flag] = false; c.setAlpha(a); });
+      return c;
+    };
+    mk(90, 460, 46, 0xffffff, '◀', 'left');
+    mk(210, 460, 46, 0xffffff, '▶', 'right');
+    mk(870, 460, 52, 0x66ccff, '▲', 'jump');
+    const act = s.add.circle(750, 420, 40, 0xffcc44, 0.5).setScrollFactor(0).setInteractive().setDepth(1000);
+    s.add.text(750, 420, 'E', { fontSize: '28px', fill: '#000' }).setOrigin(0.5).setDepth(1001);
+    act.on('pointerdown', () => s.events.emit('action'));
+  }
+  read() {
+    const left  = this.left  || this.cursors.left.isDown  || this.keys.A.isDown;
+    const right = this.right || this.cursors.right.isDown || this.keys.D.isDown;
+    const jump  = this.jump  || this.cursors.up.isDown    || this.keys.W.isDown || this.keys.SPACE.isDown;
+    const action = Phaser.Input.Keyboard.JustDown(this.keys.E);
+    return { left, right, jump, action };
+  }
+}
+
+/* ============ 3. BOOT + МЕНЮ ============ */
+class BootScene extends Phaser.Scene {
+  constructor() { super('Boot'); }
+  preload() {
+    this.add.text(480, 250, 'Загрузка...', { fontSize: '20px', fill: '#fff' }).setOrigin(0.5);
+    const fill = this.add.rectangle(280, 300, 0, 16, 0x66ccff).setOrigin(0, 0.5);
+    this.load.on('progress', p => { fill.width = 400 * p; });
+    this.load.image('snowman', 'https://labs.phaser.io/assets/sprites/phaser-dude.png');
+    this.load.image('npc', 'https://labs.phaser.io/assets/sprites/ufo.png');
+    this.load.image('ground', 'https://labs.phaser.io/assets/sprites/platform.png');
+    this.load.image('orb', 'https://labs.phaser.io/assets/sprites/orb-red.png');
+    this.load.image('gift', 'https://labs.phaser.io/assets/sprites/orb-blue.png');
+    this.load.image('block', 'https://labs.phaser.io/assets/sprites/crate.png');
+  }
+  create() { this.scene.start('Menu'); }
+}
+
+class MenuScene extends Phaser.Scene {
+  constructor() { super('Menu'); }
+  create() {
+    this.add.rectangle(480, 270, 960, 540, 0x0b1a2a);
+    for (let i = 0; i < 60; i++) {
+      const s = this.add.circle(Phaser.Math.Between(0,960), Phaser.Math.Between(0,540), Phaser.Math.Between(1,3), 0xffffff, 0.6);
+      this.tweens.add({ targets: s, y: s.y + Phaser.Math.Between(40,120), duration: Phaser.Math.Between(3000,7000), repeat: -1, yoyo: true, ease: 'Sine.inOut' });
+    }
+    this.add.text(480, 110, 'Тайна пропавшего Нового года', { fontSize: '40px', fill: '#ffe066', fontStyle: 'bold' }).setOrigin(0.5);
+
+    const s = SaveSystem.load();
+    const hasSave = s.level > 1 || s.toys > 0 || s.snowflakes.length > 0;
+
+    this.btn(480, 250, 'Новая игра', 0x225588, () => { SaveSystem.reset(); this.scene.start('Forest'); });
+    const cont = this.btn(480, 330, 'Продолжить', 0x225588, () => {
+      const map = { 1:'Forest', 2:'Village', 3:'Caves', 4:'Castle' };
+      this.scene.start(map[SaveSystem.load().level] || 'Forest');
+    });
+    if (!hasSave) { cont.setAlpha(0.35); cont.disableInteractive(); }
+
+    this.add.text(480, 410, `Уровень: ${s.level} | Игрушки: ${s.toys}/5 | Шары: ${s.snowflakes.length}/12 | Ключи: ${s.keys}/3`,
+      { fontSize: '16px', fill: '#9fc' }).setOrigin(0.5);
+
+    this.btn(480, 480, 'Сбросить прогресс', 0x662222, () => { SaveSystem.reset(); this.scene.restart(); });
+  }
+  btn(x, y, label, color, cb) {
+    const r = this.add.rectangle(x, y, 280, 52, color).setStrokeStyle(2, 0x88ccff).setInteractive({ useHandCursor: true });
+    this.add.text(x, y, label, { fontSize: '22px', fill: '#fff' }).setOrigin(0.5);
+    r.on('pointerover', () => r.setFillStyle(0x3377aa));
+    r.on('pointerout',  () => r.setFillStyle(color));
+    r.on('pointerdown', cb);
+    return r;
+  }
+}
+
+/* ============ 4. УРОВЕНЬ 1: ЛЕС ============ */
+class ForestScene extends Phaser.Scene {
+  constructor() { super('Forest'); }
+  create() {
+    this.add.rectangle(480, 270, 960, 540, 0x0e2233);
+    this.add.text(480, 40, 'Зимний лес — собери 5 игрушек', { fontSize: '28px', fill: '#ffe066' }).setOrigin(0.5);
+
+    const plat = this.physics.add.staticGroup();
+    plat.create(480, 520, 'ground').setScale(30, 1).refreshBody();
+    plat.create(300, 380, 'ground').setScale(4, 1).refreshBody();
+    plat.create(650, 300, 'ground').setScale(4, 1).refreshBody();
+
+    this.player = this.physics.add.sprite(80, 400, 'snowman').setScale(0.6);
+    this.player.setCollideWorldBounds(true).setBounce(0.1);
+    this.physics.add.collider(this.player, plat);
+
+    this.items = this.physics.add.group();
+    [[300,340],[650,260],[480,480],[120,480],[820,480]].forEach(([x,y]) => this.items.create(x, y, 'gift').setScale(0.5));
+    this.physics.add.collider(this.items, plat);
+    this.physics.add.overlap(this.player, this.items, (p, it) => {
+      it.disableBody(true, true);
+      this.toys = (this.toys || 0) + 1;
+      SaveSystem.update({ toys: this.toys });
+      this.hud.setText(`Игрушки: ${this.toys}/5`);
+      this.cameras.main.flash(120, 255, 255, 200);
+      if (this.toys >= 5) {
+        this.hud.setText('Сани готовы! Иди в деревню →');
+        this.hud.setColor('#ffe066');
+        this.time.delayedCall(1200, () => { SaveSystem.update({ level: 2 }); this.scene.start('Village'); });
+      }
+    });
+
+    this.toys = 0;
+    this.hud = this.add.text(16, 16, 'Игрушки: 0/5', { fontSize: '22px', fill: '#fff' });
+    this.lives = 3;
+    this.livesT = this.add.text(16, 46, 'Жизни: ♥♥♥', { fontSize: '22px', fill: '#ff6b6b' });
+
+    this.controls = new TouchControls(this);
+  }
+  update() {
+    const c = this.controls.read();
+    if (c.left) { this.player.setVelocityX(-220); this.player.flipX = true; }
+    else if (c.right) { this.player.setVelocityX(220); this.player.flipX = false; }
+    else this.player.setVelocityX(0);
+    if (c.jump && this.player.body.blocked.down) this.player.setVelocityY(-520);
+
+    if (this.player.y > 600) {
+      this.lives--;
+      this.livesT.setText('Жизни: ' + '♥'.repeat(Math.max(this.lives, 0)));
+      if (this.lives <= 0) { this.lives = 3; this.livesT.setText('Жизни: ♥♥♥'); this.toys = 0; this.scene.restart(); }
+      else { this.player.setPosition(80, 400); this.player.setVelocity(0, 0); }
+    }
+  }
+}
+
+/* ============ 5. УРОВЕНЬ 2: ДЕРЕВНЯ + РИТМ ============ */
+class VillageScene extends Phaser.Scene {
+  constructor() { super('Village'); }
+  create() {
+    this.add.rectangle(480, 270, 960, 540, 0x122a1a);
+    this.add.text(480, 30, 'Праздничная деревня — испеки 10 пряников', { fontSize: '24px', fill: '#ffe066' }).setOrigin(0.5);
+
+    const plat = this.physics.add.staticGroup();
+    plat.create(480, 520, 'ground').setScale(30, 1).refreshBody();
+
+    this.player = this.physics.add.sprite(100, 440, 'snowman').setScale(0.6);
+    this.player.setCollideWorldBounds(true);
+    this.physics.add.collider(this.player, plat);
+
+    this.baker = this.physics.add.sprite(600, 440, 'npc').setScale(0.7);
+    this.add.text(560, 390, 'Пекарь 🥨', { fontSize: '16px', fill: '#fff' });
+
+    this.hint = this.add.text(480, 480, 'Подойди к пекарю', { fontSize: '18px', fill: '#aaa' }).setOrigin(0.5);
+    this.score = 0; this.bakerDone = false; this.movementLocked = false; this.notes = null;
+
+    this.physics.add.overlap(this.player, this.baker, () => {
+      if (!this.bakerDone) this.startBakery();
+    });
+
+    this.controls = new TouchControls(this);
+    this.input.keyboard.on('keydown-A', () => this.checkHit(0));
+    this.input.keyboard.on('keydown-S', () => this.checkHit(1));
+    this.input.keyboard.on('keydown-D', () => this.checkHit(2));
+    this.events.on('action', () => this.checkHit(1)); // тач E = средняя нота
+  }
+  startBakery() {
+    this.bakerDone = true;
+    this.movementLocked = true;
+    this.player.setVelocity(0, 0);
+    this.hint.setText('Ритм-пекарня: жми A / S / D (или E на телефоне) в такт!').setColor('#fff');
+
+    this.laneX = [400, 480, 560];
+    this.notes = [];
+    this.add.text(392, 445, 'A', { fontSize: '24px', fill: '#fff' });
+    this.add.text(472, 445, 'S', { fontSize: '24px', fill: '#fff' });
+    this.add.text(552, 445, 'D', { fontSize: '24px', fill: '#fff' });
+
+    this.time.addEvent({ delay: 900, repeat: 11, callback: () => this.spawnNote() });
+  }
+  spawnNote() {
+    const lane = Phaser.Math.Between(0, 2);
+    const n = this.physics.add.image(this.laneX[lane], 100, 'orb').setScale(0.5);
+    n.setData('lane', lane);
+    n.setVelocityY(220);
+    this.notes.push(n);
+  }
+  checkHit(lane) {
+    if (!this.notes) return;
+    const hit = this.notes.find(n => n.active && n.getData('lane') === lane && Math.abs(n.y - 420) < 45);
+    if (hit) {
+      hit.destroy();
+      this.notes = this.notes.filter(n => n !== hit);
+      this.score++;
+      this.hint.setText(`Пряники: ${this.score}/10`);
+      if (this.score >= 10) this.finishBakery();
+    }
+  }
+  finishBakery() {
+    this.hint.setText('Готово! Пекарь даёт ключ 🔑').setColor('#ffe066');
+    this.notes.forEach(n => n.destroy());
+    this.notes = null;
+    const s = SaveSystem.load();
+    SaveSystem.update({ keys: Math.min(s.keys + 1, 3), level: 3 });
+    this.time.delayedCall(1500, () => this.scene.start('Caves'));
+  }
+  update() {
+    if (this.movementLocked) { this.player.setVelocityX(0); return; }
+    const c = this.controls.read();
+    if (c.left) this.player.setVelocityX(-220);
+    else if (c.right) this.player.setVelocityX(220);
+    else this.player.setVelocityX(0);
+
+    if (this.notes) this.notes = this.notes.filter(n => { if (n.y > 540) { n.destroy(); return false; } return true; });
+  }
+}
+
+/* ============ 6. УРОВЕНЬ 3: ПЕЩЕРЫ (БЛОКИ + ФОНАРЬ) ============ */
+class CavesScene extends Phaser.Scene {
+  constructor() { super('Caves'); }
+  create() {
+    this.add.rectangle(480, 270, 960, 540, 0x050510);
+
+    const plat = this.physics.add.staticGroup();
+    plat.create(480, 520, 'ground').setScale(30, 1).refreshBody();
+    // пропасть в середине (платформа с дырой)
+    plat.create(200, 400, 'ground').setScale(3, 1).refreshBody();
+    plat.create(760, 400, 'ground').setScale(3, 1).refreshBody();
+    // перемычка-цель для блоков
+    plat.create(480, 420, 'ground').setScale(2, 1).refreshBody();
+
+    this.player = this.physics.add.sprite(80, 440, 'snowman').setScale(0.6);
+    this.player.setCollideWorldBounds(true);
+    this.physics.add.collider(this.player, plat);
+
+    // Блоки (толкаем)
+    this.blocks = this.physics.add.group({ immovable: false, dragX: 400 });
+    [[380, 480], [480, 480], [580, 480]].forEach(([x,y]) => {
+      const b = this.blocks.create(x, y, 'block').setScale(0.8);
+      b.setCollideWorldBounds(true);
+      b.setDragX(600); b.setMaxVelocity(200, 900);
+    });
+    this.physics.add.collider(this.blocks, plat);
+    this.physics.add.collider(this.player, this.blocks, (p, b) => {
+      // толкание
+      if (Math.abs(p.body.velocity.x) > 50) b.setVelocityX(p.body.velocity.x * 0.6);
+    });
+
+    // Фонарь — заряд
+    this.lamp = 100;
+    this.lampBar = this.add.rectangle(480, 24, 400, 14, 0x224466).setOrigin(0.5);
+    this.lampFill = this.add.rectangle(280, 24, 400, 10, 0xffcc44).setOrigin(0, 0.5);
+    this.add.text(480, 50, 'Заряд фонаря', { fontSize: '14px', fill: '#fff' }).setOrigin(0.5);
+
+    this.add.text(480, 80, 'Пещеры — толкай блоки, чтобы перейти пропасть', { fontSize: '18px', fill: '#ffe066' }).setOrigin(0.5);
+
+    this.controls = new TouchControls(this);
+    this.time.addEvent({ delay: 1000, repeat: -1, callback: () => {
+      if (this.lamp > 0) this.lamp = Math.max(0, this.lamp - 4);
+      this.lampFill.width = 4 * this.lamp;
+    }});
+
+    // Сундук за пропастью
+    this.chest = this.physics.add.staticImage(900, 460, 'gift').setScale(0.8);
+    this.physics.add.overlap(this.player, this.chest, () => {
+      const c = SaveSystem.collect('snowflakes', 'cave_ball');
+      SaveSystem.update({ level: 4 });
+      this.add.text(480, 300, `Шар найден! (${c}/12) → Замок Снеговея`, { fontSize: '22px', fill: '#ffe066' }).setOrigin(0.5);
+      this.time.delayedCall(1500, () => this.scene.start('Castle'));
+    });
+  }
+  update() {
+    const c = this.controls.read();
+    if (c.left) this.player.setVelocityX(-200);
+    else if (c.right) this.player.setVelocityX(200);
+    else this.player.setVelocityX(0);
+    if (c.jump && this.player.body.blocked.down) this.player.setVelocityY(-500);
+
+    if (this.player.y > 600) { this.player.setPosition(80, 440); this.player.setVelocity(0,0); }
+  }
+}
+
+/* ============ 7. УРОВЕНЬ 4: ЗАМОК (СТЕЛС) ============ */
+class CastleScene extends Phaser.Scene {
+  constructor() { super('Castle'); }
+  create() {
+    this.add.rectangle(480, 270, 960, 540, 0x1a0a22);
+    this.add.text(480, 30, 'Ледяной замок — проберись мимо Снеговея!', { fontSize: '24px', fill: '#ffe066' }).setOrigin(0.5);
+
+    const plat = this.physics.add.staticGroup();
+    plat.create(480, 520, 'ground').setScale(30, 1).refreshBody();
+    plat.create(500, 420, 'ground').setScale(1.2, 3).refreshBody(); // колонна
+    plat.create(700, 420, 'ground').setScale(1.2, 3).refreshBody(); // колонна
+
+    this.player = this.physics.add.sprite(80, 440, 'snowman').setScale(0.6);
+    this.player.setCollideWorldBounds(true);
+    this.physics.add.collider(this.player, plat);
+
+    // Враг
+    this.enemy = this.physics.add.sprite(400, 440, 'npc').setScale(0.7);
+    this.enemy.facing = 1;
+    this.enemy.range = 240;
+
+    // Индикатор обнаружения
+    this.detect = 0;
+    this.detectBar = this.add.rectangle(480, 480, 0, 14, 0xff4444).setOrigin(0, 0.5);
+    this.add.rectangle(480, 480, 300, 14, 0x000000).setStrokeStyle(1, 0xffffff).setOrigin(0.5).setDepth(-1);
+    this.add.text(480, 460, 'Обнаружение', { fontSize: '14px', fill: '#fff' }).setOrigin(0.5);
+
+    // Цель: камин
+    this.fire = this.physics.add.staticImage(880, 440, 'orb').setScale(0.8);
+    this.hint = this.add.text(480, 110, 'Прячься за колоннами! Собери воспоминания у камина', { fontSize: '16px', fill: '#aaa' }).setOrigin(0.5);
+
+    this.controls = new TouchControls(this);
+    this.physics.add.overlap(this.player, this.fire, () => {
+      this.add.text(480, 270, '🔥 Камин найден! Снеговей раскаивается...', { fontSize: '24px', fill: '#ffe066' }).setOrigin(0.5);
+      SaveSystem.update({ level: 4, keys: 3 });
+      this.time.delayedCall(2000, () => this.scene.start('Menu'));
+    });
+  }
+  update() {
+    // Патруль
+    this.enemy.x += 80 * this.enemy.facing * (1/60);
+    if (this.enemy.x < 300) this.enemy.facing = 1;
+    if (this.enemy.x > 700) this.enemy.facing = -1;
+    this.enemy.setFlipX(this.enemy.facing < 0);
+
+    // Игрок
+    const c = this.controls.read();
+    if (c.left) this.player.setVelocityX(-200);
+    else if (c.right) this.player.setVelocityX(200);
+    else this.player.setVelocityX(0);
+    if (c.jump && this.player.body.blocked.down) this.player.setVelocityY(-500);
+
+    // Обнаружение (конус по X и расстоянию)
+    const dx = this.player.x - this.enemy.x;
+    const dy = Math.abs(this.player.y - this.enemy.y);
+    const visible = Math.abs(dx) < this.enemy.range && dy < 120 &&
+                    ((this.enemy.facing > 0 && dx > 0) || (this.enemy.facing < 0 && dx < 0));
+
+    if (visible) this.detect = Math.min(100, this.detect + 1.2);
+    else this.detect = Math.max(0, this.detect - 0.8);
+    this.detectBar.width = 3 * this.detect;
+
+    if (this.detect >= 100) {
+      this.detect = 0;
+      this.player.setPosition(80, 440);
+      this.player.setVelocity(0, 0);
+      this.cameras.main.flash(200, 255, 0, 0);
+      this.hint.setText('Поймали! Начни заново').setColor('#ff6b6b');
+    }
+  }
+}
+
+/* ============ 8. КОНФИГ ============ */
+new Phaser.Game({
+  type: Phaser.AUTO,
+  width: 960, height: 540,
+  backgroundColor: '#0b1a2a',
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+  physics: { default: 'arcade', arcade: { gravity: { y: 900 }, debug: false } },
+  scene: [BootScene, MenuScene, ForestScene, VillageScene, CavesScene, CastleScene]
+});
+
+/* Полный экран по первому тапу на мобильном */
+document.addEventListener('pointerdown', () => {
+  const el = document.documentElement;
+  if (el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(() => {});
+}, { once: true });
+</script>
+</body>
+</html>
